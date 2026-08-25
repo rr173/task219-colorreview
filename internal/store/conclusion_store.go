@@ -12,15 +12,13 @@ import (
 const conclusionCols = "id, batch_id, verdict, summary, status, version, published_at, created_at, updated_at"
 
 // CreateConclusion 创建复核结论（初版 version=1，草稿态）。
+// 替代版本由上层 Versioner 已递增好 version，此处仅在缺省时取 1。
 func (s *Store) CreateConclusion(ctx context.Context, c *model.ReviewConclusion) (*model.ReviewConclusion, error) {
 	ts := now()
 	if c.Status == "" {
 		c.Status = model.ConclusionDraft
 	}
 	if c.Version == 0 {
-		c.Version = 1
-	}
-	if c.Version > 1 {
 		c.Version = 1
 	}
 	res, err := s.db.ExecContext(ctx,

@@ -16,12 +16,13 @@ func NewVersioner(cur *model.ReviewConclusion) *Versioner {
 	return &Versioner{Current: cur}
 }
 
-// NextVersion 计算下一版本号。
+// NextVersion 计算下一版本号：无当前结论时从 1 开始；
+// 建立替代版本时在旧版本基础上递增（旧版本已冻结，保留其不可变快照）。
 func (v *Versioner) NextVersion() int {
 	if v == nil || v.Current == nil {
 		return 1
 	}
-	return v.Current.Version
+	return v.Current.Version + 1
 }
 
 // RequireFrozen 校验当前结论已冻结，否则禁止建立替代版本。
