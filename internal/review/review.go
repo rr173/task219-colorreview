@@ -24,9 +24,17 @@ func Validate(c *model.ReviewConclusion) error {
 	return nil
 }
 
-// CanPublish 判断结论能否发布。
+// CanPublish 判断结论能否发布：仅草稿与待确认态可发布；已发布/已替代不可重复发布。
 func CanPublish(c *model.ReviewConclusion) bool {
-	return c != nil && c.Status != model.ConclusionSuperseded
+	if c == nil {
+		return false
+	}
+	switch c.Status {
+	case model.ConclusionDraft, model.ConclusionPending:
+		return true
+	default:
+		return false
+	}
 }
 
 // IsFrozen 判断结论是否已冻结（发布后只能建立替代版本）。

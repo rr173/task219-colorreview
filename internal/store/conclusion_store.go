@@ -77,19 +77,59 @@ func (s *Store) GetConclusionByBatch(ctx context.Context, batchID int64) (*model
 	return &c, nil
 }
 
+// execer 抽象可执行 SQL 的目标：既能作用于底层连接，也能作用于事务，
+// 便于把多步写入纳入同一事务原子提交/回滚。
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // UpdateConclusion 更新结论内容与状态。
 func (s *Store) UpdateConclusion(ctx context.Context, c *model.ReviewConclusion) error {
+	return updateConclusion(ctx, s.db, c)
+}
+
+// updateConclusion 在给定执行器上更新结论，供事务内复用。
+func updateConclusion(ctx context.Context, ex execer, c *model.ReviewConclusion) error {
 	var publishedAt any
 	if c.PublishedAt != nil {
 		publishedAt = c.PublishedAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := ex.ExecContext(ctx,
 		`UPDATE conclusions SET verdict = ?, summary = ?, status = ?, version = ?, published_at = ?, updated_at = ? WHERE id = ?`,
 		string(c.Verdict), c.Summary, string(c.Status), c.Version, publishedAt, now(), c.ID)
 	if err != nil {
 		return fmt.Errorf("update conclusion: %w", err)
 	}
 	return nil
+}
+
+// snapshotConclusionVersion 在给定执行器上写入不可变版本快照，供事务内复用。
+func snapshotConclusionVersion(ctx context.Context, ex execer, c *model.ReviewConclusion) error {
+	_, err := ex.ExecContext(ctx,
+		`INSERT OR IGNORE INTO conclusion_versions (conclusion_id, batch_id, verdict, summary, version, snapshot_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		c.ID, c.BatchID, string(c.Verdict), c.Summary, c.Version, now())
+	if err != nil {
+		return fmt.Errorf("snapshot conclusion: %w", err)
+	}
+	return nil
+}
+
+// SnapshotConclusionVersion 写入不可变结论版本快照。
+func (s *Store) SnapshotConclusionVersion(ctx context.Context, c *model.ReviewConclusion) error {
+	return snapshotConclusionVersion(ctx, s.db, c)
+}
+
+// PublishConclusionAtomically 原子地发布结论：在同一事务内先置为发布态、
+// 再写入不可变版本快照。任一步失败整体回滚，结论不会被单独留在"已发布但无快照"
+// 的半成品状态。
+func (s *Store) PublishConclusionAtomically(ctx context.Context, c *model.ReviewConclusion) error {
+	return WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := updateConclusion(ctx, tx, c); err != nil {
+			return err
+		}
+		return snapshotConclusionVersion(ctx, tx, c)
+	})
 }
 
 // SupersedeConclusion 把当前结论置为替代态（版本迭代时）。
@@ -99,18 +139,6 @@ func (s *Store) SupersedeConclusion(ctx context.Context, id int64) error {
 		string(model.ConclusionSuperseded), now(), id)
 	if err != nil {
 		return fmt.Errorf("supersede conclusion: %w", err)
-	}
-	return nil
-}
-
-// SnapshotConclusionVersion 写入不可变结论版本快照。
-func (s *Store) SnapshotConclusionVersion(ctx context.Context, c *model.ReviewConclusion) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO conclusion_versions (conclusion_id, batch_id, verdict, summary, version, snapshot_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		c.ID, c.BatchID, string(c.Verdict), c.Summary, c.Version, now())
-	if err != nil {
-		return fmt.Errorf("snapshot conclusion: %w", err)
 	}
 	return nil
 }

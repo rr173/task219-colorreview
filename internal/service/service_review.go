@@ -33,7 +33,8 @@ func (s *Service) GetConclusion(ctx context.Context, batchID int64) (*model.Revi
 	return s.store.GetConclusionByBatch(ctx, batchID)
 }
 
-// PublishConclusion 发布结论：写入不可变版本快照并冻结。
+// PublishConclusion 发布结论：在同一事务内更新为发布态并写入不可变版本快照。
+// 任一步失败整体回滚，结论仍保持草稿态——避免"已发布但没有版本快照"的半成品状态。
 func (s *Service) PublishConclusion(ctx context.Context, id int64) (*model.ReviewConclusion, error) {
 	c, err := s.store.GetConclusion(ctx, id)
 	if err != nil {
@@ -42,14 +43,14 @@ func (s *Service) PublishConclusion(ctx context.Context, id int64) (*model.Revie
 	if !review.CanPublish(c) {
 		return nil, model.ErrInvalidTransition
 	}
+	// 在副本上变更状态：事务回滚时磁盘恢复为草稿，内存对象也不应残留发布态。
+	published := *c
 	now := time.Now().UTC()
-	c.Status = model.ConclusionPublished
-	c.PublishedAt = &now
-	if err := s.store.UpdateConclusion(ctx, c); err != nil {
+	published.Status = model.ConclusionPublished
+	published.PublishedAt = &now
+	if err := s.store.PublishConclusionAtomically(ctx, &published); err != nil {
 		return nil, err
 	}
-	// 发布即写入不可变快照。
-	_ = s.store.SnapshotConclusionVersion(ctx, c)
 	return s.store.GetConclusion(ctx, id)
 }
 
