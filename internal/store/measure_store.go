@@ -75,9 +75,13 @@ func (s *Store) ListMeasurePoints(ctx context.Context, batchID int64) ([]*model.
 }
 
 // SetMeasureStatus 更新测色点状态。
+// 剔除（rejected）是不可逆终局状态：被剔除的点无论重算多少次都不会被
+// 重新标记为 valid/anomaly，其 reject_reason 也不会被清空。写入条件显式
+// 排除 rejected 行，因此即便上层误调用，剔除语义也不会被破坏。
 func (s *Store) SetMeasureStatus(ctx context.Context, id int64, status model.MeasureStatus) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE measure_points SET status = ?, reject_reason = '' WHERE id = ?`, string(status), id)
+		`UPDATE measure_points SET status = ?, reject_reason = '' WHERE id = ? AND status != ?`,
+		string(status), id, string(model.MeasureRejected))
 	if err != nil {
 		return fmt.Errorf("set measure status: %w", err)
 	}
