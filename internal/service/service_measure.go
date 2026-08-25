@@ -21,9 +21,11 @@ func (s *Service) AddMeasurePoint(ctx context.Context, m *model.MeasurePoint, in
 	if batch.IsSealed(b) {
 		return nil, model.ErrBatchSealed
 	}
-	// 若指定仪器，用最近校准偏移修正 Lab 值。
+	// 若指定仪器，用测量时点已生效的最新校准偏移修正 Lab 值。
+	// 同一仪器会随时间产生多次校准记录，必须选取不晚于测量时刻的最新一条，
+	// 而不能套用更早的偏移或晚于测量时刻的校准。
 	if instrumentID != "" {
-		cal, err := s.store.LatestCalibration(ctx, instrumentID)
+		cal, err := s.EffectiveCalibration(ctx, instrumentID, m.MeasuredAt)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", model.ErrCalibrationMissing, err)
 		}
