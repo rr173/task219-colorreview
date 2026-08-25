@@ -22,6 +22,9 @@ func (s *Store) CreateBatch(ctx context.Context, b *model.DyeBatch) (*model.DyeB
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		b.Code, b.Name, b.Recipe, b.ColorSpace, string(b.Status), ts, ts)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, model.ErrAlreadyExists
+		}
 		return nil, fmt.Errorf("insert batch: %w", err)
 	}
 	id, err := res.LastInsertId()

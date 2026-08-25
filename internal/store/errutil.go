@@ -23,8 +23,9 @@ func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
-	// modernc.org/sqlite 对 UNIQUE 冲突返回包含 "constraint failed" 的错误。
-	return containsAny(err.Error(), "UNIQUE failed")
+	// modernc.org/sqlite 对 UNIQUE 冲突返回包含 "UNIQUE constraint failed" 的错误
+	// （完整形如 "constraint failed: UNIQUE constraint failed: batches.code (2067)"）。
+	return containsAny(err.Error(), "UNIQUE constraint failed")
 }
 
 func containsAny(s string, subs ...string) bool {

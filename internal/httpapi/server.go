@@ -87,7 +87,7 @@ func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case model.Is(err, model.ErrNotFound):
 		status = http.StatusNotFound
-	case model.Is(err, model.ErrDuplicateSample):
+	case model.Is(err, model.ErrDuplicateSample), model.Is(err, model.ErrAlreadyExists):
 		status = http.StatusConflict
 	case model.Is(err, model.ErrInvalidArgument), model.Is(err, model.ErrColorSpaceMissing),
 		model.Is(err, model.ErrTimeInverted), model.Is(err, model.ErrRejectReasonMissing):
