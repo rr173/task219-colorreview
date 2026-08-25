@@ -24,8 +24,10 @@ func Validate(e *model.ProcessEvidence) error {
 }
 
 // CanConfirm 判断证据能否被确认：冲突证据需先消解。
+// 已标记为冲突的证据不可再次确认，否则会重新进入已确认集合，
+// 污染最终归因（后者会覆盖前者）。
 func CanConfirm(e *model.ProcessEvidence) bool {
-	return e != nil
+	return e != nil && !IsConflict(e)
 }
 
 // Linkable 判断证据是否处于可关联状态。

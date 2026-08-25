@@ -49,6 +49,11 @@ func (s *Service) ConfirmEvidence(ctx context.Context, batchID, id int64) (*mode
 	if e.BatchID != batchID {
 		return nil, model.ErrNotFound
 	}
+	// 已标记为冲突的证据不可再次确认：否则会重新进入已确认集合，
+	// 被后一次确认操作污染最终归因。需先消解冲突后再确认。
+	if !evidence.CanConfirm(e) {
+		return nil, model.ErrInvalidTransition
+	}
 	if err := s.store.SetEvidenceStatus(ctx, id, model.EvidenceConfirmed); err != nil {
 		return nil, err
 	}
