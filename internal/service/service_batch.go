@@ -27,6 +27,12 @@ func (s *Service) ListBatches(ctx context.Context) ([]*model.DyeBatch, error) {
 }
 
 // AdvanceBatch 推进批次状态到下一阶段。
+//
+// 读当前状态 -> 计算下一状态 -> 用原子 compare-and-swap 写入。CAS 的
+// 前置条件是"当前状态仍为读取时看到的 from"。多个并发请求里只有一个
+// 的 CAS 能命中（状态尚为 from），其余命中 0 行并拿到 ErrInvalidTransition，
+// 即"状态冲突"。这里绝不能在失败后基于重读到的状态再次推进：那会让并发
+// 请求各自把状态往前推一格，最终都报告成功，破坏单次胜出语义。
 func (s *Service) AdvanceBatch(ctx context.Context, id int64) (*model.DyeBatch, error) {
 	b, err := s.store.GetBatch(ctx, id)
 	if err != nil {
@@ -40,13 +46,7 @@ func (s *Service) AdvanceBatch(ctx context.Context, id int64) (*model.DyeBatch, 
 		return nil, err
 	}
 	if err := s.store.SetBatchStatus(ctx, id, b.Status, next); err != nil {
-		latest, getErr := s.store.GetBatch(ctx, id)
-		if getErr != nil {
-			return nil, err
-		}
-		if retryNext, retryErr := batch.Advance(latest.Status); retryErr == nil {
-			_ = s.store.SetBatchStatus(ctx, id, latest.Status, retryNext)
-		}
+		return nil, err
 	}
 	return s.store.GetBatch(ctx, id)
 }

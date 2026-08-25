@@ -14,6 +14,7 @@ type Lifecycle struct {
 
 // Advance 根据当前状态计算推进目标。
 // 业务规则：配方中 -> 生产中 -> 待复核 -> 已确认 -> 封存；待复核也可直接封存。
+// 已封存批次不可再推进（状态机终止态），返回 ErrInvalidTransition。
 func Advance(cur model.BatchStatus) (model.BatchStatus, error) {
 	switch cur {
 	case model.BatchRecipe:
@@ -25,7 +26,7 @@ func Advance(cur model.BatchStatus) (model.BatchStatus, error) {
 	case model.BatchConfirmed:
 		return model.BatchSealed, nil
 	case model.BatchSealed:
-		return model.BatchSealed, nil
+		return "", fmt.Errorf("%w: sealed batch is terminal", model.ErrInvalidTransition)
 	default:
 		return "", fmt.Errorf("%w: unknown status %q", model.ErrInvalidTransition, cur)
 	}

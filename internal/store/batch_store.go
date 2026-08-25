@@ -75,10 +75,16 @@ func (s *Store) ListBatches(ctx context.Context) ([]*model.DyeBatch, error) {
 }
 
 // SetBatchStatus 原子更新批次状态（带乐观状态前置校验）。
+//
+// 仅当批次当前状态恰好等于 from 时才写入 to，否则返回
+// ErrInvalidTransition。UPDATE ... WHERE id=? AND status=? 是一条原子
+// 语句：在单写连接下，多个并发推进请求里只有第一个能把状态从 from 改为
+// to（命中 1 行），其余请求读到的 from 已经过期、更新命中 0 行，从而被
+// 判定为状态冲突。这赋予了批次推进“单次胜出”语义。
 func (s *Store) SetBatchStatus(ctx context.Context, id int64, from, to model.BatchStatus) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE batches SET status = ?, updated_at = ? WHERE id = ?`,
-		string(to), now(), id)
+		`UPDATE batches SET status = ?, updated_at = ? WHERE id = ? AND status = ?`,
+		string(to), now(), id, string(from))
 	if err != nil {
 		return fmt.Errorf("set batch status: %w", err)
 	}
@@ -87,6 +93,7 @@ func (s *Store) SetBatchStatus(ctx context.Context, id int64, from, to model.Bat
 		return err
 	}
 	if n == 0 {
+		// 行不存在，或当前状态已不再是 from（被并发请求抢先推进）。
 		return model.ErrInvalidTransition
 	}
 	return nil
