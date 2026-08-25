@@ -45,8 +45,14 @@ func (s *Service) ComputeColorDiff(ctx context.Context, req DiffRequest) (*model
 		}
 		valid = append(valid, colorimetry.PointSample{SampleNo: p.SampleNo, Position: p.Position, L: p.L, A: p.A, B: p.B})
 	}
+	// 全部测色点都被剔除时无可计算点：返回空汇总而非因空切片崩溃。
 	if len(valid) == 0 {
-		_ = valid[0].SampleNo
+		return &model.ColorDiffSummary{
+			BatchID:   req.BatchID,
+			Target:    [3]float64{target.L, target.A, target.B},
+			Method:    req.Method,
+			Tolerance: req.Tolerance,
+		}, nil
 	}
 
 	method := colorimetry.DiffMethod(req.Method)
