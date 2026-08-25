@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -26,8 +27,36 @@ func (s *Server) handleSelfCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDemoImport 端到端示例导入：覆盖完整业务闭环。
+// 任一步失败时报告失败并补偿回滚已创建的批次、曲线、测色点、证据、结论
+// 与独立写入的校准记录，绝不留下一次失败导入产生的残缺批次。
 func (s *Server) handleDemoImport(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	// 已创建的资源：成功写入后才赋值，回滚时按相反顺序撤销。
+	var (
+		batchID       int64
+		calibrationID int64
+		committed     bool
+	)
+	// 回滚在独立、未取消的上下文中执行：导入请求的 ctx 可能已超时或被取消，
+	// 补偿清理必须仍能落库。补偿错误不覆盖原始导入错误，仅以日志形式保留。
+	rollback := func() {
+		if calibrationID != 0 {
+			rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = s.svc.DeleteCalibration(rctx, calibrationID)
+		}
+		if batchID != 0 {
+			rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = s.svc.Store().DeleteBatch(rctx, batchID)
+		}
+	}
+	defer func() {
+		if !committed {
+			rollback()
+		}
+	}()
 
 	// 1. 创建染色批次
 	batch, err := s.svc.CreateBatch(ctx, &model.DyeBatch{
@@ -40,10 +69,17 @@ func (s *Server) handleDemoImport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	batchID = batch.ID
 
-	// 2. 推进到生产中
-	_, _ = s.svc.AdvanceBatch(ctx, batch.ID)
-	_, _ = s.svc.AdvanceBatch(ctx, batch.ID)
+	// 2. 推进到待复核
+	if _, err := s.svc.AdvanceBatch(ctx, batch.ID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if _, err := s.svc.AdvanceBatch(ctx, batch.ID); err != nil {
+		writeErr(w, err)
+		return
+	}
 
 	// 3. 上传浴液温度曲线
 	base := time.Now().UTC().Add(-2 * time.Hour)
@@ -59,15 +95,18 @@ func (s *Server) handleDemoImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. 记录仪器校准
-	_, err = s.svc.CreateCalibration(ctx, &model.InstrumentCalibration{
+	// 4. 记录仪器校准（失败即终止并回滚，不再吞掉错误）
+	cal, err := s.svc.CreateCalibration(ctx, &model.InstrumentCalibration{
 		InstrumentID: "SPECTRO-01",
 		CalibratedAt: base,
 		RefL:         50, RefA: 0, RefB: 0,
 		OffsetL: 0.2, OffsetA: -0.1, OffsetB: 0.1,
 	})
 	if err != nil {
+		writeErr(w, err)
+		return
 	}
+	calibrationID = cal.ID
 
 	// 5. 上传多点测色（含一个偏红异常点）
 	type pointSeed struct {
@@ -101,8 +140,7 @@ func (s *Server) handleDemoImport(w http.ResponseWriter, r *http.Request) {
 
 	// 6. 色差计算（目标色为靛蓝标准 Lab）
 	target := colorimetry.Lab{L: 45, A: -8, B: -22}
-	_, err = s.svc.ComputeColorDiff(ctx, serviceDiffRequest(batch.ID, target))
-	if err != nil {
+	if _, err := s.svc.ComputeColorDiff(ctx, serviceDiffRequest(batch.ID, target)); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -117,13 +155,23 @@ func (s *Server) handleDemoImport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	_, _ = s.svc.ConfirmEvidence(ctx, batch.ID, ev.ID)
+	if _, err := s.svc.ConfirmEvidence(ctx, batch.ID, ev.ID); err != nil {
+		writeErr(w, err)
+		return
+	}
 
 	// 8. 剔除异常点并发布结论
-	points, _ := s.svc.ListMeasurePoints(ctx, batch.ID)
+	points, err := s.svc.ListMeasurePoints(ctx, batch.ID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	for _, p := range points {
 		if p.SampleNo == 4 {
-			_, _ = s.svc.RejectMeasurePoint(ctx, batch.ID, p.ID, "边缘污点，取样位置污染")
+			if _, err := s.svc.RejectMeasurePoint(ctx, batch.ID, p.ID, "边缘污点，取样位置污染"); err != nil {
+				writeErr(w, err)
+				return
+			}
 		}
 	}
 	conclusion, err := s.svc.CreateConclusion(ctx, &model.ReviewConclusion{
@@ -141,13 +189,14 @@ func (s *Server) handleDemoImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	committed = true
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"batch_id":        batch.ID,
-		"batch_code":      batch.Code,
-		"measure_points":  len(points),
-		"conclusion_id":   published.ID,
+		"batch_id":         batch.ID,
+		"batch_code":       batch.Code,
+		"measure_points":   len(points),
+		"conclusion_id":    published.ID,
 		"conclusion_state": published.Status,
-		"verdict":         published.Verdict,
+		"verdict":          published.Verdict,
 	})
 }
 

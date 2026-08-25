@@ -44,6 +44,17 @@ func (s *Store) GetCalibration(ctx context.Context, id int64) (*model.Instrument
 	return &c, nil
 }
 
+// DeleteCalibration 删除某次校准记录，用于失败导入的补偿回滚。
+// 校准记录归属仪器而非批次，DeleteBatch 的级联不会触及它，故提供独立删除入口。
+// 记录不存在时视为幂等成功，不返回错误。
+func (s *Store) DeleteCalibration(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM instrument_calibrations WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete calibration: %w", err)
+	}
+	return nil
+}
+
 // LatestCalibration 返回某仪器最近一次校准记录。
 func (s *Store) LatestCalibration(ctx context.Context, instrumentID string) (*model.InstrumentCalibration, error) {
 	var c model.InstrumentCalibration

@@ -19,6 +19,11 @@ func (s *Service) CreateCalibration(ctx context.Context, c *model.InstrumentCali
 	return created, nil
 }
 
+// DeleteCalibration 删除某次校准记录，用于失败导入的补偿回滚。
+func (s *Service) DeleteCalibration(ctx context.Context, id int64) error {
+	return s.store.DeleteCalibration(ctx, id)
+}
+
 // LatestCalibration 查询某仪器最近校准。
 func (s *Service) LatestCalibration(ctx context.Context, instrumentID string) (*model.InstrumentCalibration, error) {
 	return s.store.LatestCalibration(ctx, instrumentID)
