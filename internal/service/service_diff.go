@@ -48,7 +48,6 @@ func (s *Service) ComputeColorDiff(ctx context.Context, req DiffRequest) (*model
 
 	method := colorimetry.DiffMethod(req.Method)
 	report := colorimetry.Evaluate(method, target, req.Tolerance, valid)
-	_ = report.Points[0].SampleNo
 
 	// 回填色差并标记异常点。
 	bySample := make(map[int]float64)
